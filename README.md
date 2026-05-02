@@ -1,10 +1,14 @@
-# UF2 Bootloader
+# Breezedude UF2 Bootloader
 
-This repository contains a bootloader, derived from Atmel's SAM-BA,
-which in addition to the USB CDC (serial) protocol, also supports
-the USB MSC (mass storage).
+This repository contains the UF2 bootloader for the **Breezedude** board (SAMD21G18A).
+It is based on the [Adafruit fork](https://github.com/adafruit/uf2-samdx1) of the
+[Microsoft uf2-samd21](https://github.com/Microsoft/uf2-samd21) bootloader, which in
+turn is derived from Atmel's SAM-BA. The codebase has been heavily modified for the
+Breezedude hardware and use case.
 
-[![Build Status](https://travis-ci.org/Microsoft/uf2-samd21.svg?branch=master)](https://travis-ci.org/Microsoft/uf2-samd21)
+Original upstream supports USB CDC (serial) and USB MSC (mass storage) flashing via
+the UF2 file format. This fork retains those capabilities and adds Breezedude-specific
+board configuration, pin assignments, and build customizations.
 
 ## UF2
 
@@ -23,7 +27,6 @@ Thus, it's really easy for the microcontroller to recognize a block of
 a UF2 file is written and immediately write it to flash.
 
 * **UF2 specification repo:** https://github.com/Microsoft/uf2
-* [#DeskOfLadyada UF24U ! LIVE @adafruit #adafruit #programming](https://youtu.be/WxCuB6jxLs0)
 
 ## Features
 
@@ -38,9 +41,8 @@ a UF2 file is written and immediately write it to flash.
 
 ## Board identification
 
-Configuration files for board `foo` are in `boards/foo/board_config.h` and `board.mk`. You can
-build it with `make BOARD=foo`. You can also create `Makefile.user` file with `BOARD=foo`
-to change the default.
+Configuration files for the Breezedude board are in `boards/breezedude/board_config.h` and `board.mk`.
+Build with `make BOARD=breezedude` (or set `BOARD=breezedude` in `Makefile.user` to make it the default).
 
 The board configuration specifies the USB vendor/product name and ID,
 as well as the volume label (main thing that the operating systems show).
@@ -139,15 +141,14 @@ at `0xffffffff`.
 
 ### Build commands
 
-The default board is `zero`. You can build a different one using:
+The default board is `breezedude`. Build it with:
 
 ```
-make BOARD=metro_m0
+make BOARD=breezedude
 ```
 
-If you're working on different board, it's best to create `Makefile.user`
-with say `BOARD=metro` to change the default.
-The names `zero` and `metro` refer to subdirectories of `boards/`.
+Or create a `Makefile.user` with `BOARD=breezedude` to set it as the permanent default.
+The board name refers to the subdirectory under `boards/`.
 
 There are various targets:
 * `all` - just compile the board
@@ -188,12 +189,9 @@ Thus, it's best to set the USB ID to one for which there are no drivers.
 
 The bootloader sits at 0x00000000, and the application starts at 0x00002000 (SAMD21) or 0x00004000 (SAMD51).
 
-## Code of Conduct
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
-
 ## License
 
-See THIRD-PARTY-NOTICES.txt for the original SAM-BA bootloader license from Atmel.
+See THIRD-PARTY-NOTICES.txt for the original SAM-BA bootloader license from Atmel and the
+Adafruit/Microsoft upstream licenses.
 
-The new code is licensed under MIT.
+The Breezedude-specific modifications are licensed under MIT.
