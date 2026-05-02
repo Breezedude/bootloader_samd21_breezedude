@@ -49,7 +49,7 @@ SEARCH_DIR(.)
 /* Memory Spaces Definitions */
 MEMORY
 {
-  rom      (rx)  : ORIGIN = 0x00000000, LENGTH = 0x00002000
+  rom      (rx)  : ORIGIN = 0x00000000, LENGTH = 0x00004000
   ram      (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00008000
 }
 
@@ -158,7 +158,7 @@ SECTIONS
     . = ALIGN(4);
     _end = . ;
 
-    _binfo_start = 0x00002000 - 4 * 4;
+    _binfo_start = 0x00004000 - 4 * 4;
     .binfo _binfo_start : {
       KEEP(*(.binfo)) ;
     } > rom

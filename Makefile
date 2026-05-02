@@ -1,4 +1,4 @@
-BOARD=zero
+BOARD=breezedude
 -include Makefile.user
 include boards/$(BOARD)/board.mk
 CC=arm-none-eabi-gcc
@@ -26,18 +26,34 @@ CFLAGS = $(COMMON_FLAGS) \
 -D__$(CHIP_VARIANT)__ \
 $(WFLAGS)
 
-UF2_VERSION_BASE = $(shell git describe --dirty --always --tags)
+RAW_GIT_SHA = $(shell git rev-parse --short HEAD 2>nul)
+ifeq ($(strip $(RAW_GIT_SHA)),)
+UF2_VERSION_BASE = v4.0.0
+else
+UF2_VERSION_BASE = v4.1.5-0-g$(RAW_GIT_SHA)
+endif
 
 ifeq ($(CHIP_FAMILY), samd21)
 LINKER_SCRIPT=scripts/samd21j18a.ld
-BOOTLOADER_SIZE=8192
+BOOTLOADER_SIZE=16384
 SELF_LINKER_SCRIPT=scripts/samd21j18a_self.ld
+LEGACY_SELF_LINKER_SCRIPT=scripts/samd21j18a_self_legacy.ld
+BRIDGE_LINKER_SCRIPT=scripts/samd21j18a_bridge_legacy.ld
+# Main updater image for 16KB bootloader devices. The final UF2 below also embeds
+# a tiny legacy bridge at 0x2000, so it can be reused as the robust v3.16 migration package.
+SELF_UF2_BASE=$(BOOTLOADER_SIZE)
+# Minimal legacy-only updater for old 8KB bootloader debugging. This is not the
+# preferred end-user migration file; keep it only as a diagnostic artifact.
+LEGACY_SELF_UF2_BASE=8192
 endif
 
 ifeq ($(CHIP_FAMILY), samd51)
 LINKER_SCRIPT=scripts/samd51j19a.ld
 BOOTLOADER_SIZE=16384
 SELF_LINKER_SCRIPT=scripts/samd51j19a_self.ld
+LEGACY_SELF_LINKER_SCRIPT=$(SELF_LINKER_SCRIPT)
+SELF_UF2_BASE=$(BOOTLOADER_SIZE)
+LEGACY_SELF_UF2_BASE=$(BOOTLOADER_SIZE)
 endif
 
 LDFLAGS= $(COMMON_FLAGS) \
@@ -88,17 +104,25 @@ SOURCES = $(COMMON_SRC) \
 SELF_SOURCES = $(COMMON_SRC) \
 	src/selfmain.c
 
+BRIDGE_SOURCES = \
+	src/init_$(CHIP_FAMILY).c \
+	src/startup_$(CHIP_FAMILY).c \
+	src/selfbridge.c
+
 OBJECTS = $(patsubst src/%.c,$(BUILD_PATH)/%.o,$(SOURCES))
 SELF_OBJECTS = $(patsubst src/%.c,$(BUILD_PATH)/%.o,$(SELF_SOURCES)) $(BUILD_PATH)/selfdata.o
+BRIDGE_OBJECTS = $(patsubst src/%.c,$(BUILD_PATH)/%.o,$(BRIDGE_SOURCES))
 
 NAME=bootloader-$(BOARD)-$(UF2_VERSION_BASE)
 EXECUTABLE=$(BUILD_PATH)/$(NAME).bin
 SELF_EXECUTABLE=$(BUILD_PATH)/update-$(NAME).uf2
+LEGACY_SELF_EXECUTABLE=$(BUILD_PATH)/update-legacy-$(NAME).uf2
+BRIDGE_EXECUTABLE=$(BUILD_PATH)/update-bridge-$(NAME).bin
 SELF_EXECUTABLE_INO=$(BUILD_PATH)/update-$(NAME).ino
 
 SUBMODULES = lib/uf2/README.md
 
-all: submodules dirs $(EXECUTABLE) $(SELF_EXECUTABLE)
+all: submodules dirs $(EXECUTABLE) $(SELF_EXECUTABLE) $(LEGACY_SELF_EXECUTABLE)
 submodules: $(SUBMODULES)
 
 r: run
@@ -156,7 +180,7 @@ selflogs:
 
 dirs:
 	@echo "Building $(BOARD)"
-	-@mkdir -p $(BUILD_PATH)
+	-@if not exist "$(BUILD_PATH)" mkdir "$(BUILD_PATH)"
 
 $(EXECUTABLE): $(OBJECTS)
 	$(CC) -L$(BUILD_PATH) $(LDFLAGS) \
@@ -164,18 +188,31 @@ $(EXECUTABLE): $(OBJECTS)
 		 -Wl,-Map,$(BUILD_PATH)/$(NAME).map -o $(BUILD_PATH)/$(NAME).elf $(OBJECTS)
 	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/$(NAME).elf $@
 	@echo
-	-@arm-none-eabi-size $(BUILD_PATH)/$(NAME).elf | awk '{ s=$$1+$$2; print } END { print ""; print "Space left: " ($(BOOTLOADER_SIZE)-s) }'
+	-@arm-none-eabi-size $(BUILD_PATH)/$(NAME).elf
 	@echo
 
 $(BUILD_PATH)/uf2_version.h: Makefile
-	echo "#define UF2_VERSION_BASE \"$(UF2_VERSION_BASE)\""> $@
+	@echo #define UF2_VERSION_BASE ^"$(UF2_VERSION_BASE)^" > $@
 
-$(SELF_EXECUTABLE): $(SELF_OBJECTS)
+$(BRIDGE_EXECUTABLE): $(BRIDGE_OBJECTS)
+	$(CC) -L$(BUILD_PATH) $(LDFLAGS) \
+		 -T$(BRIDGE_LINKER_SCRIPT) \
+		 -Wl,-Map,$(BUILD_PATH)/update-bridge-$(NAME).map -o $(BUILD_PATH)/update-bridge-$(NAME).elf $(BRIDGE_OBJECTS)
+	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/update-bridge-$(NAME).elf $@
+
+$(SELF_EXECUTABLE): $(SELF_OBJECTS) $(BRIDGE_EXECUTABLE)
 	$(CC) -L$(BUILD_PATH) $(LDFLAGS) \
 		 -T$(SELF_LINKER_SCRIPT) \
 		 -Wl,-Map,$(BUILD_PATH)/update-$(NAME).map -o $(BUILD_PATH)/update-$(NAME).elf $(SELF_OBJECTS)
 	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/update-$(NAME).elf $(BUILD_PATH)/update-$(NAME).bin
-	python3 lib/uf2/utils/uf2conv.py -b $(BOOTLOADER_SIZE) -c -o $@ $(BUILD_PATH)/update-$(NAME).bin
+	python3 scripts/make_dual_update.py $(BRIDGE_EXECUTABLE) 0x00002000 $(BUILD_PATH)/update-$(NAME).bin 0x00004000 $@
+
+$(LEGACY_SELF_EXECUTABLE): $(SELF_OBJECTS)
+	$(CC) -L$(BUILD_PATH) $(LDFLAGS) \
+		 -T$(LEGACY_SELF_LINKER_SCRIPT) \
+		 -Wl,-Map,$(BUILD_PATH)/update-legacy-$(NAME).map -o $(BUILD_PATH)/update-legacy-$(NAME).elf $(SELF_OBJECTS)
+	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/update-legacy-$(NAME).elf $(BUILD_PATH)/update-legacy-$(NAME).bin
+	python3 lib/uf2/utils/uf2conv.py -b $(LEGACY_SELF_UF2_BASE) -c -o $@ $(BUILD_PATH)/update-legacy-$(NAME).bin
 
 $(BUILD_PATH)/%.o: src/%.c $(wildcard inc/*.h boards/*/*.h) $(BUILD_PATH)/uf2_version.h
 	echo "$<"
@@ -188,7 +225,7 @@ $(BUILD_PATH)/selfdata.c: $(EXECUTABLE) scripts/gendata.py src/sketch.cpp
 	python3 scripts/gendata.py $(BOOTLOADER_SIZE) $(EXECUTABLE)
 
 clean:
-	rm -rf build
+	-@if exist build rmdir /s /q build
 
 gdb:
 	arm-none-eabi-gdb $(BUILD_PATH)/$(NAME).elf
@@ -210,8 +247,7 @@ drop-board: all
 	mkdir -p build/drop
 	rm -rf build/drop/$(BOARD)
 	mkdir -p build/drop/$(BOARD)
-	cp $(SELF_EXECUTABLE) build/drop/$(BOARD)/
-	cp $(EXECUTABLE) build/drop/$(BOARD)/
+	cp $(SELF_EXECUTABLE) build/drop/$(BOARD)/	cp $(LEGACY_SELF_EXECUTABLE) build/drop/$(BOARD)//	cp $(EXECUTABLE) build/drop/$(BOARD)/
 # .ino works only for SAMD21 right now; suppress for SAMD51
 ifeq ($(CHIP_FAMILY),samd21)
 	cp $(SELF_EXECUTABLE_INO) build/drop/$(BOARD)/

@@ -6,9 +6,9 @@
 
 // All entries are little endian.
 
-// if you increase that, you will also need to update the linker script file
+// Breezedude SAMD21 now uses a 16 KB bootloader, so the runtime app starts at 0x4000.
 #ifdef SAMD21
-#define APP_START_ADDRESS 0x00002000
+#define APP_START_ADDRESS 0x00004000
 #define UF2_FAMILY 0x68ed2b88
 #endif
 #ifdef SAMD51

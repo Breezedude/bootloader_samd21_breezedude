@@ -82,6 +82,127 @@
 
 static void check_start_application(void);
 
+static bool image_base_valid(uint32_t image_base, uint32_t exec_start, uint32_t exec_end) {
+    uint32_t stack_ptr = *(uint32_t *)image_base;
+    uint32_t reset_vec = *(uint32_t *)(image_base + 4);
+
+#if defined(SAMD21)
+    bool stack_ok = (stack_ptr >= HMCRAMC0_ADDR) && (stack_ptr <= (HMCRAMC0_ADDR + HMCRAMC0_SIZE)) && ((stack_ptr & 0x3u) == 0);
+#elif defined(SAMD51)
+    bool stack_ok = (stack_ptr >= HSRAM_ADDR) && (stack_ptr <= (HSRAM_ADDR + HSRAM_SIZE)) && ((stack_ptr & 0x3u) == 0);
+#else
+    bool stack_ok = ((stack_ptr & 0x3u) == 0);
+#endif
+
+    return stack_ok && (reset_vec & 1u) && reset_vec >= exec_start && reset_vec < exec_end;
+}
+
+static bool app_base_valid(uint32_t app_base) {
+    uint32_t slot_end = app_base == OTA_SLOT1_START ? (OTA_SLOT1_START + OTA_SLOT1_SIZE) : (OTA_SLOT0_START + OTA_SLOT0_SIZE);
+    return image_base_valid(app_base, app_base, slot_end);
+}
+
+static bool staged_base_valid(uint32_t app_base) {
+    return image_base_valid(app_base, OTA_SLOT0_START, OTA_SLOT0_START + OTA_SLOT0_SIZE);
+}
+
+static uint32_t staged_image_size(uint32_t app_base, uint32_t slot_size) {
+    const uint32_t start = app_base;
+    const uint32_t end = app_base + slot_size;
+    const uint32_t *p = (const uint32_t *)(end - 4u);
+
+    while ((uint32_t)p >= start) {
+        if (*p != 0xFFFFFFFFu) {
+            uint32_t used = ((uint32_t)p + 4u) - start;
+            return (used + FLASH_ROW_SIZE - 1u) & ~(FLASH_ROW_SIZE - 1u);
+        }
+        p--;
+    }
+
+    return 0;
+}
+
+static bool ota_write_flags(uint32_t active_slot, uint32_t pending_slot) {
+    OTA_AB_Flags cfg;
+    uint32_t row[FLASH_ROW_SIZE / 4];
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.magic = OTA_AB_MAGIC;
+    cfg.version = OTA_AB_VERSION;
+    cfg.active_slot = active_slot;
+    cfg.pending_slot = pending_slot;
+    cfg.checksum = ota_ab_checksum(&cfg);
+
+    for (uint32_t i = 0; i < (FLASH_ROW_SIZE / 4); ++i) {
+        row[i] = 0xFFFFFFFFu;
+    }
+    memcpy(row, &cfg, sizeof(cfg));
+    flash_write_row((void *)OTA_FLAG_ADDRESS, row);
+
+    const OTA_AB_Flags *written = (const OTA_AB_Flags *)OTA_FLAG_ADDRESS;
+    return ota_ab_valid(written) && written->active_slot == active_slot && written->pending_slot == pending_slot;
+}
+
+static bool copy_staged_application(uint32_t src_base) {
+    uint32_t used = staged_image_size(src_base, OTA_SLOT1_SIZE);
+    uint32_t row[FLASH_ROW_SIZE / 4];
+
+    if (!used || used > OTA_SLOT0_SIZE) {
+        return false;
+    }
+
+    for (uint32_t off = 0; off < OTA_SLOT0_SIZE; off += FLASH_ROW_SIZE) {
+        for (uint32_t i = 0; i < (FLASH_ROW_SIZE / 4); ++i) {
+            row[i] = 0xFFFFFFFFu;
+        }
+        if (off < used) {
+            memcpy(row, (const void *)(src_base + off), FLASH_ROW_SIZE);
+        }
+        flash_write_row((void *)(OTA_SLOT0_START + off), row);
+    }
+
+    return app_base_valid(OTA_SLOT0_START);
+}
+
+static void ota_prepare_application(void) {
+    const OTA_AB_Flags *cfg = (const OTA_AB_Flags *)OTA_FLAG_ADDRESS;
+    bool slot0_ok = app_base_valid(OTA_SLOT0_START);
+    bool slot1_direct_ok = app_base_valid(OTA_SLOT1_START);
+    bool slot1_staged_ok = staged_base_valid(OTA_SLOT1_START);
+
+    if (ota_ab_valid(cfg) && cfg->pending_slot == 1u) {
+        if (slot1_staged_ok) {
+            if (copy_staged_application(OTA_SLOT1_START)) {
+                ota_write_flags(0u, 0u);
+                slot0_ok = true;
+            }
+        } else if (slot0_ok) {
+            ota_write_flags(0u, 0u);
+        }
+    }
+
+    if (!slot0_ok && slot1_staged_ok) {
+        if (copy_staged_application(OTA_SLOT1_START)) {
+            ota_write_flags(0u, 0u);
+        }
+    } else if (!slot0_ok && slot1_direct_ok) {
+        ota_write_flags(1u, 1u);
+    }
+}
+
+static uint32_t pick_application_base(void) {
+    ota_prepare_application();
+
+    if (app_base_valid(OTA_SLOT0_START)) {
+        return OTA_SLOT0_START;
+    }
+    if (app_base_valid(OTA_SLOT1_START)) {
+        return OTA_SLOT1_START;
+    }
+
+    return 0;
+}
+
 static volatile bool main_b_cdc_enable = false;
 extern int8_t led_tick_step;
 
@@ -96,16 +217,22 @@ extern int8_t led_tick_step;
  *
  */
 static void check_start_application(void) {
+    uint32_t app_base = pick_application_base();
     uint32_t app_start_address;
 
-    /* Load the Reset Handler address of the application */
-    app_start_address = *(uint32_t *)(APP_START_ADDRESS + 4);
+    if (!app_base) {
+        /* Stay in bootloader */
+        return;
+    }
+
+    /* Load the Reset Handler address of the selected application slot */
+    app_start_address = *(uint32_t *)(app_base + 4);
 
     /**
-     * Test reset vector of application @APP_START_ADDRESS+4
+     * Test reset vector of application @app_base+4
      * Sanity check on the Reset_Handler address
      */
-    if (app_start_address < APP_START_ADDRESS || app_start_address > FLASH_SIZE) {
+    if (app_start_address < app_base || app_start_address > FLASH_SIZE) {
         /* Stay in bootloader */
         return;
     }
@@ -146,10 +273,10 @@ static void check_start_application(void) {
 #endif
 
     /* Rebase the Stack Pointer */
-    __set_MSP(*(uint32_t *)APP_START_ADDRESS);
+    __set_MSP(*(uint32_t *)app_base);
 
     /* Rebase the vector table base address */
-    SCB->VTOR = ((uint32_t)APP_START_ADDRESS & SCB_VTOR_TBLOFF_Msk);
+    SCB->VTOR = (app_base & SCB_VTOR_TBLOFF_Msk);
 
     /* Jump to application Reset Handler in the application */
     asm("bx %0" ::"r"(app_start_address));

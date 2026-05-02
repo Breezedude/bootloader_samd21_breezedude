@@ -38,6 +38,74 @@
 
 #include "uf2_version.h"
 
+// Single-image OTA layout for Breezedude on SAMD21.
+// - 16 KiB UF2 bootloader at 0x00000000..0x00003FFF
+// - runtime bank at 0x00004000..0x0001FFFF
+// - staging bank at 0x00020000..0x0003DFFF
+// - top 8 KiB reserved for bootloader-managed settings/version text blobs and flags
+#ifndef APP_START_ADDRESS
+#define APP_START_ADDRESS 0x00004000UL
+#endif
+#ifndef OTA_SLOT0_START
+#define OTA_SLOT0_START APP_START_ADDRESS
+#endif
+#ifndef OTA_SLOT1_START
+#define OTA_SLOT1_START 0x00020000UL
+#endif
+#ifndef OTA_FLASH_END
+#define OTA_FLASH_END 0x0003E000UL
+#endif
+#ifndef OTA_SLOT0_SIZE
+#define OTA_SLOT0_SIZE (OTA_SLOT1_START - OTA_SLOT0_START)
+#endif
+#ifndef OTA_SLOT1_SIZE
+#define OTA_SLOT1_SIZE (OTA_FLASH_END - OTA_SLOT1_START)
+#endif
+#ifndef OTA_SETTINGS_ADDRESS
+#define OTA_SETTINGS_ADDRESS 0x0003E000UL
+#endif
+#ifndef OTA_SETTINGS_SIZE
+#define OTA_SETTINGS_SIZE 0x00000200UL
+#endif
+#ifndef OTA_VERSIONS_ADDRESS
+#define OTA_VERSIONS_ADDRESS 0x0003E200UL
+#endif
+#ifndef OTA_VERSIONS_SIZE
+#define OTA_VERSIONS_SIZE 0x00000200UL
+#endif
+#ifndef OTA_FLAG_ADDRESS
+#define OTA_FLAG_ADDRESS 0x0003EF00UL
+#endif
+#define OTA_AB_MAGIC 0x42544455UL
+#define OTA_AB_VERSION 1UL
+#define OTA_AB_NUM_SLOTS 2UL
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t active_slot;
+    uint32_t pending_slot;
+    uint32_t checksum;
+} OTA_AB_Flags;
+
+static inline uint32_t ota_ab_checksum_words(uint32_t active_slot, uint32_t pending_slot) {
+    return OTA_AB_MAGIC ^ OTA_AB_VERSION ^ active_slot ^ pending_slot ^ 0xA5A55A5AUL;
+}
+
+static inline uint32_t ota_ab_checksum(const OTA_AB_Flags *cfg) {
+    return ota_ab_checksum_words(cfg->active_slot, cfg->pending_slot);
+}
+
+static inline bool ota_ab_valid(const OTA_AB_Flags *cfg) {
+    return cfg->magic == OTA_AB_MAGIC && cfg->version == OTA_AB_VERSION &&
+           cfg->active_slot < OTA_AB_NUM_SLOTS && cfg->pending_slot < OTA_AB_NUM_SLOTS &&
+           cfg->checksum == ota_ab_checksum(cfg);
+}
+
+static inline uint32_t ota_slot_address(uint32_t slot) {
+    return slot ? OTA_SLOT1_START : OTA_SLOT0_START;
+}
+
 // needs to be more than ~4200 (to force FAT16)
 #define NUM_FAT_BLOCKS 16000
 
@@ -48,14 +116,14 @@
 // Enable reading flash via FAT files; otherwise drive will appear empty
 #define USE_FAT 1 // 272 bytes
 // Enable index.htm file on the drive
-#define USE_INDEX_HTM 1 // 132 bytes
+#define USE_INDEX_HTM 0 // 132 bytes; disabled to save space, WebUSB stays enabled separately
 // Enable USB CDC (Communication Device Class; i.e., USB serial) monitor for Arduino style flashing
 #define USE_CDC 1 // 1264 bytes (plus terminal, see below)
 // Support the UART (real serial port, not USB)
 #define USE_UART 0
 // Support Human Interface Device (HID) - serial, flashing and debug
-#define USE_HID 1 // 788 bytes
-// Expose HID via WebUSB
+#define USE_HID 0 // 788 bytes; disabled to free space
+// Expose HID-like transport via WebUSB
 #define USE_WEBUSB 1
 // Doesn't yet disable code, just enumeration
 #define USE_MSC 1
@@ -68,15 +136,16 @@
 
 // If enabled, bootloader will start on power-on and every reset. A second reset
 // will start the app. This only happens if the app says it wants that (see SINGLE_RESET() below).
-// If disabled here or by the app, the bootloader will only start with double-click of the reset
-// button.
-#define USE_SINGLE_RESET 1
+// If enabled here or by the app, the bootloader will try a temporary monitor stay on normal
+// reset. On Breezedude this can keep the device in the bootloader whenever USB enumerates,
+// so keep it off and use the normal double-click / explicit handover path instead.
+#define USE_SINGLE_RESET 0
 
 // Fine-tuning of features
 #define USE_HID_SERIAL 0   // just an example, not really needed; 36 bytes
-#define USE_HID_EXT 1      // extended HID commands (read/write mem); 60 bytes
-#define USE_HID_HANDOVER 1 // allow HID application->bootloader seamless transition; 56 bytes
-#define USE_MSC_HANDOVER 1 // ditto for MSC; 348 bytes
+#define USE_HID_EXT 0      // extended HID commands (read/write mem); 60 bytes; disabled
+#define USE_HID_HANDOVER 0 // allow HID application->bootloader seamless transition; 56 bytes; disabled
+#define USE_MSC_HANDOVER 0 // ditto for MSC; 348 bytes; disabled for space
 #define USE_MSC_CHECKS 0   // check validity of MSC commands; 460 bytes
 #define USE_CDC_TERMINAL 0 // enable ASCII mode on CDC loop (not used by BOSSA); 228 bytes
 #define USE_DBG_MSC 0      // output debug info about MSC
@@ -129,9 +198,17 @@
 #define MSC_HANDOVER_VERSION ""
 #endif
 
+#ifndef UF2_VERSION_PUBLIC
+#define UF2_VERSION_PUBLIC UF2_VERSION_BASE
+#endif
+
+#ifdef UF2_VERSION_OVERRIDE
+#define UF2_VERSION UF2_VERSION_OVERRIDE
+#else
 #define UF2_VERSION                                                                                \
     UF2_VERSION_BASE " " CDC_VERSION LOGS_VERSION FAT_VERSION ASSERT_VERSION HID_VERSION           \
         WEB_VERSION RESET_VERSION MSC_HANDOVER_VERSION
+#endif
 
 // End of config
 
@@ -289,6 +366,22 @@ void RGBLED_set_color(uint32_t color);
 #define LED_MSC_TGL()
 #endif
 
+// Not all targets have a dedicated flash/error LED
+#if defined(ERROR_LED_PIN)
+#if defined(ERROR_LED_PIN_PULLUP)
+#define LED_ERR_OFF() PINOP(ERROR_LED_PIN, OUTSET)
+#define LED_ERR_ON() PINOP(ERROR_LED_PIN, OUTCLR)
+#else
+#define LED_ERR_OFF() PINOP(ERROR_LED_PIN, OUTCLR)
+#define LED_ERR_ON() PINOP(ERROR_LED_PIN, OUTSET)
+#endif
+#define LED_ERR_TGL() PINOP(ERROR_LED_PIN, OUTTGL)
+#else
+#define LED_ERR_OFF()
+#define LED_ERR_ON()
+#define LED_ERR_TGL()
+#endif
+
 // Not all targets have a TX LED
 #if defined(LED_TX_PIN)
 #if defined(LED_TX_PIN_PULLUP)
@@ -343,7 +436,11 @@ STATIC_ASSERT(FLASH_ROW_SIZE == NVMCTRL_ROW_SIZE);
 STATIC_ASSERT(FLASH_NUM_ROWS * 4 == FLASH_NB_OF_PAGES);
 #endif
 
-extern const char infoUf2File[];
+extern const char uf2VersionString[];
+
+#if USE_INFO_UF2
+extern char infoUf2File[];
+#endif
 
 #if USE_SCREEN
 void draw_screen(void);

@@ -2,7 +2,7 @@
 #error "update_bootloader*.ino is not available for SAMD51 boards"
 #endif
 
-#define BOOTLOADER_K 8
+#define BOOTLOADER_K 16
 
 // Error indications:
 // 2 quick flashes repeated forever: Flash page size wrong
@@ -184,7 +184,7 @@ void setup() {
     uint32_t zeros[2] = {0, 0};
     flash_write_words((uint32_t *)(BOOTLOADER_K * 1024), zeros, 2);
 
-    setBootProt(2); // 8kB
+    setBootProt(1); // 16kB
 
 }
 

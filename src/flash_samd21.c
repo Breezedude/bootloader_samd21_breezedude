@@ -5,6 +5,18 @@
     while (NVMCTRL->INTFLAG.bit.READY == 0)                                                        \
         ;
 
+static inline void flash_activity_begin(void) {
+    LED_ERR_ON();
+}
+
+static inline void flash_activity_tick(void) {
+    LED_ERR_TGL();
+}
+
+static inline void flash_activity_end(void) {
+    LED_ERR_OFF();
+}
+
 void flash_erase_row(uint32_t *dst) {
     wait_ready();
     NVMCTRL->STATUS.reg = NVMCTRL_STATUS_MASK;
@@ -24,10 +36,13 @@ void flash_erase_to_end(uint32_t *start_address) {
 
     uint32_t dst_addr = (uint32_t) start_address; // starting address
 
+    flash_activity_begin();
     while (dst_addr < FLASH_SIZE) {
         flash_erase_row((void *)dst_addr);
+        flash_activity_tick();
         dst_addr += FLASH_ROW_SIZE;
     }
+    flash_activity_end();
 }
 
 void copy_words(uint32_t *dst, uint32_t *src, uint32_t n_words) {
@@ -56,6 +71,7 @@ void flash_write_words(uint32_t *dst, uint32_t *src, uint32_t n_words) {
         // Execute "WP" Write Page
         NVMCTRL->CTRLA.reg = NVMCTRL_CTRLA_CMDEX_KEY | NVMCTRL_CTRLA_CMD_WP;
         wait_ready();
+        flash_activity_tick();
     }
 }
 
@@ -65,6 +81,7 @@ void flash_write(void) {
     uint32_t n_rows = *src++;
 
     NVMCTRL->CTRLB.bit.MANW = 1;
+    flash_activity_begin();
     while (n_rows--) {
         wait_ready();
         NVMCTRL->STATUS.reg = NVMCTRL_STATUS_MASK;
@@ -73,6 +90,7 @@ void flash_write(void) {
         NVMCTRL->ADDR.reg = (uint32_t)dst / 2;
         NVMCTRL->CTRLA.reg = NVMCTRL_CTRLA_CMDEX_KEY | NVMCTRL_CTRLA_CMD_ER;
         wait_ready();
+        flash_activity_tick();
 
         // there are 4 pages to a row
         for (int i = 0; i < 4; ++i) {
@@ -87,8 +105,10 @@ void flash_write(void) {
             // Execute "WP" Write Page
             NVMCTRL->CTRLA.reg = NVMCTRL_CTRLA_CMDEX_KEY | NVMCTRL_CTRLA_CMD_WP;
             wait_ready();
+            flash_activity_tick();
         }
     }
+    flash_activity_end();
 }
 
 // Skip writing blocks that are identical to the existing block.
@@ -110,6 +130,9 @@ void flash_write_row(uint32_t *dst, uint32_t *src) {
     }
 #endif
 
+    flash_activity_begin();
     flash_erase_row(dst);
+    flash_activity_tick();
     flash_write_words(dst, src, FLASH_ROW_SIZE / 4);
+    flash_activity_end();
 }

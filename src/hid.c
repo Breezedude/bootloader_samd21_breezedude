@@ -97,6 +97,7 @@ void process_core(HID_InBuffer *pkt) {
         return;
 
     uint32_t tmp;
+    (void)tmp; /* may be unused when USE_INFO_UF2=0 */
 
 #if USE_HID_SERIAL
     if (pkt->serial) {
@@ -128,9 +129,13 @@ void process_core(HID_InBuffer *pkt) {
 
     switch (cmdId) {
     case HF2_CMD_INFO:
+#if USE_INFO_UF2
         tmp = strlen(infoUf2File);
         memcpy(pkt->resp.data8, infoUf2File, tmp);
         send_hf2_response(pkt, tmp);
+#else
+        send_hf2_response(pkt, 0);
+#endif
         return;
 
     case HF2_CMD_BININFO:

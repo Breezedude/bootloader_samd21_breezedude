@@ -174,6 +174,10 @@ void led_init() {
 #if defined(LED_PIN)
     PINOP(LED_PIN, DIRSET);
 #endif
+#if defined(ERROR_LED_PIN)
+    PINOP(ERROR_LED_PIN, DIRSET);
+    LED_ERR_OFF();
+#endif
     LED_MSC_ON();
 
 #if defined(BOARD_RGBLED_CLOCK_PIN)

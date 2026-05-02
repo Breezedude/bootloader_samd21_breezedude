@@ -50,14 +50,119 @@ STATIC_ASSERT(sizeof(DirEntry) == 32);
 struct TextFile {
     const char name[11];
     const char *content;
+    uint32_t flashAddr;
+    uint32_t maxSize;
 };
 
 #define STR0(x) #x
 #define STR(x) STR0(x)
-const char infoUf2File[] = //
-    "UF2 Bootloader " UF2_VERSION "\r\n"
-    "Model: " PRODUCT_NAME "\r\n"
-    "Board-ID: " BOARD_ID "\r\n";
+
+/* Version string always present in flash so the app can locate it by scanning
+ * bootloader space for the "UF2 Bootloader " prefix, regardless of USE_INFO_UF2. */
+const char uf2VersionString[] = "UF2 Bootloader " UF2_VERSION "\r\n";
+
+#if USE_INFO_UF2
+char infoUf2File[160];
+
+static void uint32_to_hex(uint32_t v, char *out) {
+    static const char hex[] = "0123456789ABCDEF";
+    for (int i = 7; i >= 0; --i) {
+        out[i] = hex[v & 0xF];
+        v >>= 4;
+    }
+}
+
+static char *append_str(char *dst, const char *end, const char *src) {
+    while (*src && dst < end) {
+        *dst++ = *src++;
+    }
+    return dst;
+}
+
+static void build_info_file(void) {
+    if (infoUf2File[0] != '\0') {
+        return; // already built
+    }
+    char uuid[33];
+    uint32_to_hex(SERIAL0, uuid +  0);
+    uint32_to_hex(SERIAL1, uuid +  8);
+    uint32_to_hex(SERIAL2, uuid + 16);
+    uint32_to_hex(SERIAL3, uuid + 24);
+    uuid[32] = '\0';
+
+    char *p = infoUf2File;
+    char *e = infoUf2File + sizeof(infoUf2File) - 1;
+    p = append_str(p, e, "UF2 Bootloader " UF2_VERSION "\r\n");
+    p = append_str(p, e, "Model: " PRODUCT_NAME "\r\n");
+    p = append_str(p, e, "Board-ID: " BOARD_ID "\r\n");
+    p = append_str(p, e, "Chip-ID: ");
+    p = append_str(p, e, uuid);
+    p = append_str(p, e, "\r\n");
+    *p = '\0';
+}
+#endif // USE_INFO_UF2
+
+static const char defaultSettingsFile[] =
+    "# Replace this file contents with the actual settings file. To create one it is recommended to use the configurator at https://install.breezedude.de/\r\n";
+
+static const char defaultVersionsFile[] =
+    "Bootloader: " UF2_VERSION_PUBLIC "\r\n"
+    "Bootloader build date: " __DATE__ " " __TIME__ "\r\n";
+
+static void text_file_write(const struct TextFile *file, const uint8_t *data, uint32_t len);
+
+static bool version_line_matches_installed(const uint8_t *src, uint32_t maxSize) {
+    static const char prefix[] = "Bootloader: ";
+    static const char version[] = UF2_VERSION_PUBLIC;
+    const uint32_t prefixLen = sizeof(prefix) - 1;
+    const uint32_t versionLen = sizeof(version) - 1;
+
+    for (uint32_t i = 0; i < maxSize; ++i) {
+        uint8_t c = src[i];
+        if (c == 0x00 || c == 0xFF) {
+            break;
+        }
+        if (i > 0 && src[i - 1] != '\n' && src[i - 1] != '\r') {
+            continue;
+        }
+        if (i + prefixLen + versionLen > maxSize) {
+            break;
+        }
+        if (memcmp(src + i, prefix, prefixLen) != 0) {
+            continue;
+        }
+
+        uint32_t pos = i + prefixLen;
+        if (memcmp(src + pos, version, versionLen) != 0) {
+            continue;
+        }
+        pos += versionLen;
+
+        if (pos >= maxSize) {
+            return true;
+        }
+
+        c = src[pos];
+        if (c == '\r' || c == '\n' || c == 0x00 || c == 0xFF) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void ensure_versions_file_matches_bootloader(const struct TextFile *file) {
+    if (file->flashAddr != OTA_VERSIONS_ADDRESS || !file->flashAddr || !file->maxSize) {
+        return;
+    }
+
+    const uint8_t *src = (const uint8_t *)(uintptr_t)file->flashAddr;
+    if (version_line_matches_installed(src, file->maxSize)) {
+        return;
+    }
+
+    text_file_write(file, (const uint8_t *)defaultVersionsFile, strlen(defaultVersionsFile));
+}
 
 #if USE_FAT
 #if USE_INDEX_HTM
@@ -75,11 +180,15 @@ const char indexFile[] = //
 // WARNING -- code presumes only one NULL .content for .UF2 file
 //            and requires it be the last element of the array
 static const struct TextFile info[] = {
-    {.name = "INFO_UF2TXT", .content = infoUf2File},
-#if USE_INDEX_HTM
-    {.name = "INDEX   HTM", .content = indexFile},
+#if USE_INFO_UF2
+    {.name = "INFO_UF2TXT", .content = infoUf2File, .flashAddr = 0, .maxSize = 0},
 #endif
-    {.name = "CURRENT UF2"},
+#if USE_INDEX_HTM
+    {.name = "INDEX   HTM", .content = indexFile, .flashAddr = 0, .maxSize = 0},
+#endif
+    {.name = "SETTINGSTXT", .content = NULL, .flashAddr = OTA_SETTINGS_ADDRESS, .maxSize = OTA_SETTINGS_SIZE},
+    {.name = "VERSIONSTXT", .content = NULL, .flashAddr = OTA_VERSIONS_ADDRESS, .maxSize = OTA_VERSIONS_SIZE},
+    {.name = "CURRENT UF2", .content = NULL, .flashAddr = 0, .maxSize = 0},
 };
 #define NUM_FILES (sizeof(info) / sizeof(info[0]))
 #define NUM_DIRENTRIES (NUM_FILES + 1) // Code adds volume label as first root directory entry
@@ -136,7 +245,116 @@ void padded_memcpy(char *dst, const char *src, int len) {
     }
 }
 
+static const char *text_file_fallback(const struct TextFile *file) {
+    if (file->flashAddr == OTA_SETTINGS_ADDRESS) {
+        return defaultSettingsFile;
+    }
+    if (file->flashAddr == OTA_VERSIONS_ADDRESS) {
+        return defaultVersionsFile;
+    }
+    return file->content;
+}
+
+static uint32_t text_file_read(const struct TextFile *file, uint8_t *data) {
+    memset(data, 0, 512);
+
+    if (file->content) {
+        uint32_t len = strlen(file->content);
+        memcpy(data, file->content, len > 511 ? 511 : len);
+        return len;
+    }
+
+    if (file->flashAddr && file->maxSize) {
+        ensure_versions_file_matches_bootloader(file);
+
+        const uint8_t *src = (const uint8_t *)(uintptr_t)file->flashAddr;
+        uint32_t n = 0;
+        bool any = false;
+
+        while (n < file->maxSize && n < 511) {
+            uint8_t c = src[n];
+            if (c == 0x00 || c == 0xFF) {
+                break;
+            }
+            data[n] = c;
+            any = true;
+            n++;
+        }
+
+        if (any) {
+            return n;
+        }
+    }
+
+    const char *fallback = text_file_fallback(file);
+    if (!fallback) {
+        return 0;
+    }
+
+    uint32_t len = strlen(fallback);
+    memcpy(data, fallback, len > 511 ? 511 : len);
+    return len;
+}
+
+static uint32_t text_file_size(const struct TextFile *file) {
+    if (file->content) {
+        return strlen(file->content);
+    }
+    if (file->flashAddr && file->maxSize) {
+        uint8_t tmp[512];
+        return text_file_read(file, tmp);
+    }
+    return UF2_SIZE;
+}
+
+static void ota_force_slot0_active(void) {
+    OTA_AB_Flags cfg;
+    uint32_t row[FLASH_ROW_SIZE / 4];
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.magic = OTA_AB_MAGIC;
+    cfg.version = OTA_AB_VERSION;
+    cfg.active_slot = 0u;
+    cfg.pending_slot = 0u;
+    cfg.checksum = ota_ab_checksum(&cfg);
+
+    for (uint32_t i = 0; i < (FLASH_ROW_SIZE / 4); ++i) {
+        row[i] = 0xFFFFFFFFu;
+    }
+    memcpy(row, &cfg, sizeof(cfg));
+    flash_write_row((uint32_t *)(uintptr_t)OTA_FLAG_ADDRESS, row);
+}
+
+static void text_file_write(const struct TextFile *file, const uint8_t *data, uint32_t len) {
+    uint8_t row[FLASH_ROW_SIZE];
+
+    if (!file->flashAddr || !file->maxSize) {
+        return;
+    }
+
+    for (uint32_t off = 0; off < file->maxSize; off += FLASH_ROW_SIZE) {
+        uint32_t chunk = file->maxSize - off;
+        if (chunk > FLASH_ROW_SIZE) {
+            chunk = FLASH_ROW_SIZE;
+        }
+
+        memset(row, 0xFF, sizeof(row));
+        if (off < len) {
+            uint32_t copyLen = len - off;
+            if (copyLen > chunk) {
+                copyLen = chunk;
+            }
+            memcpy(row, data + off, copyLen);
+        }
+
+        flash_write_row((uint32_t *)(uintptr_t)(file->flashAddr + off), (uint32_t *)(void *)row);
+    }
+}
+
 void read_block(uint32_t block_no, uint8_t *data) {
+#if USE_INFO_UF2
+    build_info_file();
+#endif
     memset(data, 0, 512);
     uint32_t sectionIdx = block_no;
 
@@ -180,7 +398,7 @@ void read_block(uint32_t block_no, uint8_t *data) {
             for (int i = 0; i < NUM_FILES; ++i) {
                 d++;
                 const struct TextFile *inf = &info[i];
-                d->size = inf->content ? strlen(inf->content) : UF2_SIZE;
+                d->size = text_file_size(inf);
                 d->startCluster = i + 2;
                 padded_memcpy(d->name, inf->name, 11);
                 d->createDate = 0x4d99;
@@ -191,7 +409,7 @@ void read_block(uint32_t block_no, uint8_t *data) {
         sectionIdx -= START_CLUSTERS;
         // WARNING -- code presumes all but last file take exactly one sector
         if (sectionIdx < NUM_FILES - 1) {
-            memcpy(data, info[sectionIdx].content, strlen(info[sectionIdx].content));
+            text_file_read(&info[sectionIdx], data);
         } else {
             sectionIdx -= NUM_FILES - 1;
             uint32_t addr = sectionIdx * 256;
@@ -214,6 +432,23 @@ void read_block(uint32_t block_no, uint8_t *data) {
 }
 
 void write_block(uint32_t block_no, uint8_t *data, bool quiet, WriteState *state) {
+    bool valid_target = false;
+#if USE_FAT
+    if (block_no >= START_CLUSTERS) {
+        uint32_t sectionIdx = block_no - START_CLUSTERS;
+        if (sectionIdx < NUM_FILES - 1) {
+            const struct TextFile *file = &info[sectionIdx];
+            if (file->flashAddr && file->maxSize) {
+                text_file_write(file, data, 512);
+                // Keep the USB MSC connection alive for editable virtual text files.
+                // A reset is useful after flashing a UF2 firmware image, but it is
+                // disruptive when the host simply saves SETTINGS.TXT or VERSIONS.TXT.
+                return;
+            }
+        }
+    }
+#endif
+
     UF2_Block *bl = (void *)data;
     if (!is_uf2_block(bl) || !UF2_IS_MY_FAMILY(bl)) {
         return;
@@ -228,6 +463,7 @@ void write_block(uint32_t block_no, uint8_t *data, bool quiet, WriteState *state
         // this happens when we're trying to re-flash CURRENT.UF2 file previously
         // copied from a device; we still want to count these blocks to reset properly
     } else {
+        valid_target = true;
         // logval("write block at", bl->targetAddr);
         flash_write_row((void *)bl->targetAddr, (void *)bl->data);
     }
@@ -248,6 +484,12 @@ void write_block(uint32_t block_no, uint8_t *data, bool quiet, WriteState *state
                 state->numWritten++;
             }
             if (state->numWritten >= state->numBlocks) {
+                if (valid_target && bl->targetAddr >= OTA_SLOT0_START && bl->targetAddr < OTA_SLOT1_START) {
+                    // A manually copied UF2 into the runtime bank must win over any
+                    // older pending slot-B metadata, otherwise the next boot can copy
+                    // the staged image back over the freshly written updater/app.
+                    ota_force_slot0_active();
+                }
                 // wait a little bit before resetting, to avoid Windows transmit error
                 // https://github.com/Microsoft/uf2-samd21/issues/11
                 if (!quiet)

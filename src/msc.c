@@ -875,5 +875,11 @@ __attribute__((section(".binfo"))) __attribute__((__used__)) const UF2_BInfo bin
 #if USE_HID_HANDOVER
     .handoverHID = hidHandoverLoop,
 #endif
+#if USE_INFO_UF2
     .info_uf2 = infoUf2File,
+#else
+    /* Point to the version string so the app can find it by scanning bootloader
+     * flash, and so the linker doesn't GC the symbol under --gc-sections. */
+    .info_uf2 = uf2VersionString,
+#endif
 };

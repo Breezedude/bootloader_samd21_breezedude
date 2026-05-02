@@ -3,7 +3,7 @@
 #include "sam.h"
 
 #if defined(SAMD21)
-#define BOOTLOADER_K 8
+#define BOOTLOADER_K 16
 #elif defined(SAMD51)
 #define BOOTLOADER_K 16
 #endif
@@ -196,7 +196,7 @@ int main(void) {
 
 #ifdef SAMD21
     // Re-enable BOOTPROT
-    set_fuses_and_bootprot(2); // 8k
+    set_fuses_and_bootprot(1); // 16k
 #endif
     // For the SAMD51, the boot protection will automatically be re-enabled on
     // reset.
