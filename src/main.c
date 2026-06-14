@@ -106,7 +106,14 @@ static bool staged_base_valid(uint32_t app_base) {
     return image_base_valid(app_base, OTA_SLOT0_START, OTA_SLOT0_START + OTA_SLOT0_SIZE);
 }
 
-static uint32_t staged_image_size(uint32_t app_base, uint32_t slot_size) {
+static uint32_t staged_image_size(uint32_t app_base, uint32_t slot_size, uint32_t declared_size) {
+    // If the firmware recorded an explicit, plausible size for the staged
+    // image, trust it instead of scanning. 0 and 0xFFFFFFFF (erased flash)
+    // both mean "no declared size" and fall back to the legacy scan below.
+    if (declared_size != 0u && declared_size != 0xFFFFFFFFu && declared_size <= slot_size) {
+        return (declared_size + FLASH_ROW_SIZE - 1u) & ~(FLASH_ROW_SIZE - 1u);
+    }
+
     const uint32_t start = app_base;
     const uint32_t end = app_base + slot_size;
     const uint32_t *p = (const uint32_t *)(end - 4u);
@@ -143,8 +150,8 @@ static bool ota_write_flags(uint32_t active_slot, uint32_t pending_slot) {
     return ota_ab_valid(written) && written->active_slot == active_slot && written->pending_slot == pending_slot;
 }
 
-static bool copy_staged_application(uint32_t src_base) {
-    uint32_t used = staged_image_size(src_base, OTA_SLOT1_SIZE);
+static bool copy_staged_application(uint32_t src_base, uint32_t declared_size) {
+    uint32_t used = staged_image_size(src_base, OTA_SLOT1_SIZE, declared_size);
     uint32_t row[FLASH_ROW_SIZE / 4];
 
     if (!used || used > OTA_SLOT0_SIZE) {
@@ -172,9 +179,15 @@ static void ota_prepare_application(void) {
 
     if (ota_ab_valid(cfg) && cfg->pending_slot == 1u) {
         if (slot1_staged_ok) {
-            if (copy_staged_application(OTA_SLOT1_START)) {
+            if (copy_staged_application(OTA_SLOT1_START, cfg->staged_size)) {
                 ota_write_flags(0u, 0u);
                 slot0_ok = true;
+            } else {
+                // Copy failed (bad/implausible size, or nothing usable found
+                // by the scan fallback). Clear pending_slot so this device
+                // doesn't retry the same failed copy on every boot and
+                // instead keeps running the still-valid SLOT0 image.
+                ota_write_flags(cfg->active_slot, 0u);
             }
         } else if (slot0_ok) {
             ota_write_flags(0u, 0u);
@@ -182,7 +195,7 @@ static void ota_prepare_application(void) {
     }
 
     if (!slot0_ok && slot1_staged_ok) {
-        if (copy_staged_application(OTA_SLOT1_START)) {
+        if (copy_staged_application(OTA_SLOT1_START, 0u)) {
             ota_write_flags(0u, 0u);
         }
     } else if (!slot0_ok && slot1_direct_ok) {

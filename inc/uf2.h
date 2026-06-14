@@ -86,6 +86,13 @@ typedef struct {
     uint32_t active_slot;
     uint32_t pending_slot;
     uint32_t checksum;
+    // Size in bytes of the staged image in OTA_SLOT1, as written by the
+    // firmware at OTA-write time. Appended after `checksum` so that the
+    // checksum formula (and OTA_AB_VERSION) stay unchanged: old (pre-this-
+    // field) flag rows read back with staged_size == 0xFFFFFFFF (erased) or
+    // 0 (zero-initialized), both of which are treated as "unknown" by the
+    // bootloader and fall back to the legacy scan-based size detection.
+    uint32_t staged_size;
 } OTA_AB_Flags;
 
 static inline uint32_t ota_ab_checksum_words(uint32_t active_slot, uint32_t pending_slot) {
@@ -288,6 +295,7 @@ void panic(int code);
 
 extern volatile bool b_sam_ba_interface_usart;
 void flash_write_row(uint32_t *dst, uint32_t *src);
+void flash_erase_row(uint32_t *dst);
 void flash_erase_to_end(uint32_t *start_address);
 void flash_write_words(uint32_t *dst, uint32_t *src, uint32_t n_words);
 void copy_words(uint32_t *dst, uint32_t *src, uint32_t n_words);

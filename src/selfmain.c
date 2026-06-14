@@ -195,6 +195,40 @@ int main(void) {
     flash_write_words((void *)(BOOTLOADER_K * 1024), zeros, 2);
 
 #ifdef SAMD21
+    // One-time migration cleanup: scrub the OTA staging area (SLOT1) and the
+    // reserved GAP/FLAG/TAIL region back to erased (0xFF), leaving
+    // OTA_SETTINGS/OTA_VERSIONS (the device's field configuration, stored at
+    // 0x3E000-0x3E400) untouched. Then write a fresh, valid OTA_AB_Flags so
+    // every freshly-migrated device starts with active=0/pending=0 and a
+    // known-good checksum, instead of inheriting whatever garbage was left
+    // over from the old v3.16 layout.
+    logmsg("Scrubbing OTA staging/flag area");
+
+    for (uint32_t addr = OTA_SLOT1_START; addr < OTA_FLASH_END; addr += FLASH_ROW_SIZE) {
+        flash_erase_row((void *)addr);
+    }
+    for (uint32_t addr = OTA_VERSIONS_ADDRESS + OTA_VERSIONS_SIZE; addr < FLASH_SIZE; addr += FLASH_ROW_SIZE) {
+        flash_erase_row((void *)addr);
+    }
+
+    {
+        OTA_AB_Flags cfg;
+        uint32_t flag_row[FLASH_ROW_SIZE / 4];
+
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.magic = OTA_AB_MAGIC;
+        cfg.version = OTA_AB_VERSION;
+        cfg.active_slot = 0u;
+        cfg.pending_slot = 0u;
+        cfg.checksum = ota_ab_checksum(&cfg);
+
+        for (uint32_t i = 0; i < (FLASH_ROW_SIZE / 4); ++i) {
+            flag_row[i] = 0xFFFFFFFFu;
+        }
+        memcpy(flag_row, &cfg, sizeof(cfg));
+        flash_write_row((void *)OTA_FLAG_ADDRESS, flag_row);
+    }
+
     // Re-enable BOOTPROT
     set_fuses_and_bootprot(1); // 16k
 #endif
