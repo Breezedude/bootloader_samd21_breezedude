@@ -30,7 +30,7 @@ RAW_GIT_SHA = $(shell git rev-parse --short HEAD 2>nul)
 ifeq ($(strip $(RAW_GIT_SHA)),)
 UF2_VERSION_BASE = v4.0.0
 else
-UF2_VERSION_BASE = v4.1.5-0-g$(RAW_GIT_SHA)
+UF2_VERSION_BASE = v4.2.0-0-g$(RAW_GIT_SHA)
 endif
 
 ifeq ($(CHIP_FAMILY), samd21)
@@ -45,6 +45,13 @@ SELF_UF2_BASE=$(BOOTLOADER_SIZE)
 # Minimal legacy-only updater for old 8KB bootloader debugging. This is not the
 # preferred end-user migration file; keep it only as a diagnostic artifact.
 LEGACY_SELF_UF2_BASE=8192
+
+# One-time "layout v2" OTA migration updater for devices already on the 16KB
+# bootloader (layout v1). Uses the same base address as SELF_UF2_BASE since
+# BOOTPROT stays at 16k; see src/selfmain_layoutv2.c.
+LAYOUTV2_SOURCES = $(COMMON_SRC) src/selfmain_layoutv2.c
+LAYOUTV2_OBJECTS = $(patsubst src/%.c,$(BUILD_PATH)/%.o,$(LAYOUTV2_SOURCES)) $(BUILD_PATH)/selfdata.o
+LAYOUTV2_EXECUTABLE=$(BUILD_PATH)/update-layoutv2-$(NAME).uf2
 endif
 
 ifeq ($(CHIP_FAMILY), samd51)
@@ -122,7 +129,7 @@ SELF_EXECUTABLE_INO=$(BUILD_PATH)/update-$(NAME).ino
 
 SUBMODULES = lib/uf2/README.md
 
-all: submodules dirs $(EXECUTABLE) $(SELF_EXECUTABLE) $(LEGACY_SELF_EXECUTABLE)
+all: submodules dirs $(EXECUTABLE) $(SELF_EXECUTABLE) $(LEGACY_SELF_EXECUTABLE) $(LAYOUTV2_EXECUTABLE)
 submodules: $(SUBMODULES)
 
 r: run
@@ -213,6 +220,13 @@ $(LEGACY_SELF_EXECUTABLE): $(SELF_OBJECTS)
 		 -Wl,-Map,$(BUILD_PATH)/update-legacy-$(NAME).map -o $(BUILD_PATH)/update-legacy-$(NAME).elf $(SELF_OBJECTS)
 	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/update-legacy-$(NAME).elf $(BUILD_PATH)/update-legacy-$(NAME).bin
 	python3 lib/uf2/utils/uf2conv.py -b $(LEGACY_SELF_UF2_BASE) -c -o $@ $(BUILD_PATH)/update-legacy-$(NAME).bin
+
+$(LAYOUTV2_EXECUTABLE): $(LAYOUTV2_OBJECTS)
+	$(CC) -L$(BUILD_PATH) $(LDFLAGS) \
+		 -T$(SELF_LINKER_SCRIPT) \
+		 -Wl,-Map,$(BUILD_PATH)/update-layoutv2-$(NAME).map -o $(BUILD_PATH)/update-layoutv2-$(NAME).elf $(LAYOUTV2_OBJECTS)
+	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/update-layoutv2-$(NAME).elf $(BUILD_PATH)/update-layoutv2-$(NAME).bin
+	python3 lib/uf2/utils/uf2conv.py -b $(SELF_UF2_BASE) -c -o $@ $(BUILD_PATH)/update-layoutv2-$(NAME).bin
 
 $(BUILD_PATH)/%.o: src/%.c $(wildcard inc/*.h boards/*/*.h) $(BUILD_PATH)/uf2_version.h
 	echo "$<"

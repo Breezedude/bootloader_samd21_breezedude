@@ -38,11 +38,21 @@
 
 #include "uf2_version.h"
 
-// Single-image OTA layout for Breezedude on SAMD21.
+// Single-image OTA layout for Breezedude on SAMD21 ("layout v2", since
+// bootloader v4.2.0 / firmware v1.1.0).
 // - 16 KiB UF2 bootloader at 0x00000000..0x00003FFF
-// - runtime bank at 0x00004000..0x0001FFFF
-// - staging bank at 0x00020000..0x0003DFFF
-// - top 8 KiB reserved for bootloader-managed settings/version text blobs and flags
+// - runtime bank (OTA_SLOT0) at 0x00004000..0x00021CFF (122112 B / 119.25 KiB)
+// - staging bank (OTA_SLOT1) at 0x00021D00..0x0003FAFF (122368 B / 119.5 KiB)
+// - top 1280 B reserved for bootloader-managed settings/version text blobs and flags
+//   (768 B settings, 256 B versions, 256 B A/B flag row)
+//
+// Layout v1 (pre v4.2.0) used a 50/50 split (OTA_SLOT1_START=0x20000,
+// OTA_FLASH_END=0x3E000) with an 8 KiB CONFIG tail, most of which was unused
+// padding. Layout v2 shrinks CONFIG to its real minimum (1280 B) and grows
+// OTA_SLOT0 accordingly. Devices on layout v1 are moved to layout v2 via the
+// one-time "layout v2" migration UF2 (see src/selfmain_layoutv2.c), which
+// relocates OTA_SETTINGS to its new address before installing this
+// bootloader.
 #ifndef APP_START_ADDRESS
 #define APP_START_ADDRESS 0x00004000UL
 #endif
@@ -50,10 +60,10 @@
 #define OTA_SLOT0_START APP_START_ADDRESS
 #endif
 #ifndef OTA_SLOT1_START
-#define OTA_SLOT1_START 0x00020000UL
+#define OTA_SLOT1_START 0x00021D00UL
 #endif
 #ifndef OTA_FLASH_END
-#define OTA_FLASH_END 0x0003E000UL
+#define OTA_FLASH_END 0x0003FB00UL
 #endif
 #ifndef OTA_SLOT0_SIZE
 #define OTA_SLOT0_SIZE (OTA_SLOT1_START - OTA_SLOT0_START)
@@ -62,19 +72,19 @@
 #define OTA_SLOT1_SIZE (OTA_FLASH_END - OTA_SLOT1_START)
 #endif
 #ifndef OTA_SETTINGS_ADDRESS
-#define OTA_SETTINGS_ADDRESS 0x0003E000UL
+#define OTA_SETTINGS_ADDRESS 0x0003FB00UL
 #endif
 #ifndef OTA_SETTINGS_SIZE
-#define OTA_SETTINGS_SIZE 0x00000200UL
+#define OTA_SETTINGS_SIZE 0x00000300UL
 #endif
 #ifndef OTA_VERSIONS_ADDRESS
-#define OTA_VERSIONS_ADDRESS 0x0003E200UL
+#define OTA_VERSIONS_ADDRESS 0x0003FE00UL
 #endif
 #ifndef OTA_VERSIONS_SIZE
-#define OTA_VERSIONS_SIZE 0x00000200UL
+#define OTA_VERSIONS_SIZE 0x00000100UL
 #endif
 #ifndef OTA_FLAG_ADDRESS
-#define OTA_FLAG_ADDRESS 0x0003EF00UL
+#define OTA_FLAG_ADDRESS 0x0003FF00UL
 #endif
 #define OTA_AB_MAGIC 0x42544455UL
 #define OTA_AB_VERSION 1UL
@@ -436,7 +446,7 @@ void blink_n_forever(uint32_t pin, uint32_t n, uint32_t interval);
 
 #define CONCAT_1(a, b) a##b
 #define CONCAT_0(a, b) CONCAT_1(a, b)
-#define STATIC_ASSERT(e) enum { CONCAT_0(_static_assert_, __LINE__) = 1 / ((e) ? 1 : 0) }
+#define STATIC_ASSERT(e) enum { CONCAT_0(_static_assert_, __COUNTER__) = 1 / ((e) ? 1 : 0) }
 
 #ifdef SAMD21
 STATIC_ASSERT(FLASH_ROW_SIZE == FLASH_PAGE_SIZE * 4);
