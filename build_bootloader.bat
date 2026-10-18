@@ -15,11 +15,19 @@ set "DEST_DIR=%~dp0..\breezedude_WindSensor\bootloader"
 rem Optional manual overrides (set in shell before calling this script):
 rem   UF2_VERSION_OVERRIDE         -> full internal UF2 version string
 rem   UF2_VERSION_PUBLIC_OVERRIDE  -> short version shown in VERSIONS.TXT
+rem
+rem Optional argument:
+rem   build_bootloader.bat wipe    -> additionally build the full-flash wiper
+rem                                   (same as setting WIPER=1 in the shell)
+
+set "MAKE_EXTRA="
+if /I "%~1"=="wipe" set "WIPER=1"
+if "%WIPER%"=="1" set "MAKE_EXTRA=WIPER=1"
 
 if exist "build" rmdir /s /q "build"
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
-set "UF2BASE=v4.2.0"
+set "UF2BASE=v4.2.1"
 set "UF2VER=%UF2BASE%"
 for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set "GITSHA=%%i"
 if defined GITSHA set "UF2VER=%UF2BASE%-0-g%GITSHA%"
@@ -33,18 +41,20 @@ echo #define UF2_VERSION_BASE ^"%UF2VER%^" > "%BUILD_DIR%\uf2_version.h"
 echo #define UF2_VERSION_PUBLIC ^"%UF2PUBLIC%^" >> "%BUILD_DIR%\uf2_version.h"
 if defined UF2_VERSION_OVERRIDE echo #define UF2_VERSION_OVERRIDE ^"%UF2_VERSION_OVERRIDE%^" >> "%BUILD_DIR%\uf2_version.h"
 
-make BOARD=%BOARD%
+make BOARD=%BOARD% %MAKE_EXTRA%
 if errorlevel 1 exit /b %errorlevel%
 
 set "BOOT_BIN="
 set "UPDATE_UF2="
 set "LEGACY_MIN_UF2="
 set "LAYOUTV2_UF2="
+set "WIPE_UF2="
 
 for %%f in ("%BUILD_DIR%\bootloader-%BOARD%-*.bin") do set "BOOT_BIN=%%~ff"
 for %%f in ("%BUILD_DIR%\update-bootloader-%BOARD%-*.uf2") do set "UPDATE_UF2=%%~ff"
 for %%f in ("%BUILD_DIR%\update-legacy-bootloader-%BOARD%-*.uf2") do set "LEGACY_MIN_UF2=%%~ff"
 for %%f in ("%BUILD_DIR%\update-layoutv2-bootloader-%BOARD%-*.uf2") do set "LAYOUTV2_UF2=%%~ff"
+for %%f in ("%BUILD_DIR%\update-WIPE-ALL-FLASH-bootloader-%BOARD%-*.uf2") do set "WIPE_UF2=%%~ff"
 
 if not defined BOOT_BIN (
   echo ERROR: bootloader binary not found
@@ -68,6 +78,10 @@ if defined LAYOUTV2_UF2 (
   copy /y "%LAYOUTV2_UF2%" "%DEST_DIR%\update-bootloader-breezedude-layout-v2-migration.uf2" >nul
 )
 
+if defined WIPE_UF2 (
+  copy /y "%WIPE_UF2%" "%DEST_DIR%\update-bootloader-breezedude-WIPE-ALL-FLASH.uf2" >nul
+)
+
 if exist "%DEST_DIR%\update-bootloader-breezedude-16k-legacy.uf2" del /q "%DEST_DIR%\update-bootloader-breezedude-16k-legacy.uf2"
 if exist "%DEST_DIR%\update-bootloader-breezedude-from-v3.16.uf2" del /q "%DEST_DIR%\update-bootloader-breezedude-from-v3.16.uf2"
 if exist "%DEST_DIR%\update-bootloader-breezedude-16k.uf2" del /q "%DEST_DIR%\update-bootloader-breezedude-16k.uf2"
@@ -77,6 +91,7 @@ echo Created user-facing artifacts in "%DEST_DIR%":
 echo   - update-bootloader-breezedude.uf2 (bootloader update AND v3.16 migration - same file for both)
 if defined LAYOUTV2_UF2 echo   - update-bootloader-breezedude-layout-v2-migration.uf2 (one-time OTA layout v1 -^> v2 migration for existing v4.1.x devices)
 if defined LEGACY_MIN_UF2 echo   - update-bootloader-breezedude-16k-legacy-minimal.uf2 (debug only)
+if defined WIPE_UF2 echo   - update-bootloader-breezedude-WIPE-ALL-FLASH.uf2 (SERVICE TOOL: reinstalls bootloader and ERASES firmware + settings)
 
 for %%f in ("%BUILD_DIR%\bootloader-breezedude*.elf") do (
   echo.

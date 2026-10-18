@@ -434,6 +434,10 @@ void RGBLED_set_color(uint32_t color);
 
 extern uint32_t timerHigh, resetHorizon;
 void timerTick(void);
+// Wall-clock (SysTick based) reset into the app, independent of main loop speed.
+void scheduleAppReset(uint32_t ms);
+// Pushes a pending scheduleAppReset() out to ms from now; no-op if none is pending.
+void postponeAppReset(uint32_t ms);
 void delay(uint32_t ms);
 void hidHandoverLoop(int ep);
 void handoverPrep(void);

@@ -30,7 +30,7 @@ RAW_GIT_SHA = $(shell git rev-parse --short HEAD 2>nul)
 ifeq ($(strip $(RAW_GIT_SHA)),)
 UF2_VERSION_BASE = v4.0.0
 else
-UF2_VERSION_BASE = v4.2.0-0-g$(RAW_GIT_SHA)
+UF2_VERSION_BASE = v4.2.1-0-g$(RAW_GIT_SHA)
 endif
 
 ifeq ($(CHIP_FAMILY), samd21)
@@ -52,6 +52,21 @@ LEGACY_SELF_UF2_BASE=8192
 LAYOUTV2_SOURCES = $(COMMON_SRC) src/selfmain_layoutv2.c
 LAYOUTV2_OBJECTS = $(patsubst src/%.c,$(BUILD_PATH)/%.o,$(LAYOUTV2_SOURCES)) $(BUILD_PATH)/selfdata.o
 LAYOUTV2_EXECUTABLE=$(BUILD_PATH)/update-layoutv2-$(NAME).uf2
+
+# Full-flash wiper: reinstalls the bootloader and then erases *everything*
+# above it (application, OTA staging, settings, versions, A/B flags) back to
+# 0xFF. Service tool for devices with suspected stale/corrupt flash content;
+# see src/selfmain_wipe.c. Not part of "all" unless WIPER=1 is passed, so the
+# file cannot end up in a release drop by accident. Like SELF_EXECUTABLE it is
+# packaged with the legacy bridge at 0x2000, so it also works on devices still
+# running the old 8KB bootloader.
+WIPE_SOURCES = $(COMMON_SRC) src/selfmain_wipe.c
+WIPE_OBJECTS = $(patsubst src/%.c,$(BUILD_PATH)/%.o,$(WIPE_SOURCES)) $(BUILD_PATH)/selfdata.o
+WIPE_NAME=update-WIPE-ALL-FLASH-$(NAME)
+WIPE_EXECUTABLE=$(BUILD_PATH)/$(WIPE_NAME).uf2
+ifeq ($(WIPER),1)
+WIPE_IN_ALL=$(WIPE_EXECUTABLE)
+endif
 endif
 
 ifeq ($(CHIP_FAMILY), samd51)
@@ -129,8 +144,12 @@ SELF_EXECUTABLE_INO=$(BUILD_PATH)/update-$(NAME).ino
 
 SUBMODULES = lib/uf2/README.md
 
-all: submodules dirs $(EXECUTABLE) $(SELF_EXECUTABLE) $(LEGACY_SELF_EXECUTABLE) $(LAYOUTV2_EXECUTABLE)
+all: submodules dirs $(EXECUTABLE) $(SELF_EXECUTABLE) $(LEGACY_SELF_EXECUTABLE) $(LAYOUTV2_EXECUTABLE) $(WIPE_IN_ALL)
 submodules: $(SUBMODULES)
+
+# Service tool, opt-in: "make wipe" (or "make WIPER=1" to get it out of "all").
+wipe: submodules dirs $(WIPE_EXECUTABLE)
+	@echo "*** WARNING: $(WIPE_EXECUTABLE) erases the complete flash above the bootloader."
 
 r: run
 b: burn
@@ -227,6 +246,13 @@ $(LAYOUTV2_EXECUTABLE): $(LAYOUTV2_OBJECTS)
 		 -Wl,-Map,$(BUILD_PATH)/update-layoutv2-$(NAME).map -o $(BUILD_PATH)/update-layoutv2-$(NAME).elf $(LAYOUTV2_OBJECTS)
 	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/update-layoutv2-$(NAME).elf $(BUILD_PATH)/update-layoutv2-$(NAME).bin
 	python3 lib/uf2/utils/uf2conv.py -b $(SELF_UF2_BASE) -c -o $@ $(BUILD_PATH)/update-layoutv2-$(NAME).bin
+
+$(WIPE_EXECUTABLE): $(WIPE_OBJECTS) $(BRIDGE_EXECUTABLE)
+	$(CC) -L$(BUILD_PATH) $(LDFLAGS) \
+		 -T$(SELF_LINKER_SCRIPT) \
+		 -Wl,-Map,$(BUILD_PATH)/$(WIPE_NAME).map -o $(BUILD_PATH)/$(WIPE_NAME).elf $(WIPE_OBJECTS)
+	arm-none-eabi-objcopy -O binary $(BUILD_PATH)/$(WIPE_NAME).elf $(BUILD_PATH)/$(WIPE_NAME).bin
+	python3 scripts/make_dual_update.py $(BRIDGE_EXECUTABLE) 0x00002000 $(BUILD_PATH)/$(WIPE_NAME).bin 0x00004000 $@
 
 $(BUILD_PATH)/%.o: src/%.c $(wildcard inc/*.h boards/*/*.h) $(BUILD_PATH)/uf2_version.h
 	echo "$<"

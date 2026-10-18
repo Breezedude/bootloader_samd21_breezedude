@@ -4,6 +4,14 @@
 static uint32_t timerLow;
 uint32_t timerHigh, resetHorizon;
 
+// SysTick ticks, incremented in led_tick(). SysTick_Config(1000) at 48 MHz
+// (SAMD21 and SAMD51) gives 48 ticks per millisecond.
+static volatile uint32_t now;
+#define SYSTICKS_PER_MS 48
+
+static bool appResetPending;
+static uint32_t appResetAt;
+
 void __attribute__ ((noinline)) delay(uint32_t ms) {
     // These multipliers were determined empirically and are only approximate.
     // After the pulsing LED is enabled (led_tick_on), the multipliers need to change
@@ -54,7 +62,23 @@ void timerTick(void) {
             resetHorizon = 0;
             resetIntoApp();
         }
+        // Checked here (main context) rather than in the SysTick ISR, so the
+        // reset can never interrupt a flash row write.
+        if (appResetPending && (int32_t)(now - appResetAt) >= 0) {
+            appResetPending = false;
+            resetIntoApp();
+        }
     }
+}
+
+void scheduleAppReset(uint32_t ms) {
+    appResetAt = now + ms * SYSTICKS_PER_MS;
+    appResetPending = true;
+}
+
+void postponeAppReset(uint32_t ms) {
+    if (appResetPending)
+        scheduleAppReset(ms);
 }
 
 void panic(int code) {
@@ -133,7 +157,6 @@ void logval(const char *lbl, uint32_t v) {
 }
 #endif
 
-static uint32_t now;
 static uint32_t signal_end;
 int8_t led_tick_step = 1;
 volatile bool led_tick_on = false;

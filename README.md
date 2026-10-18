@@ -84,6 +84,56 @@ it, is to just copy this file to the exposed MSD drive.
 The build also generates `update-bootloader*.ino` with an equivalent Arduino
 sketch. You can copy&paste it into Arduino IDE and upload it to the device.
 
+## Full-flash wiper (service tool)
+
+`update-WIPE-ALL-FLASH-*.uf2` reinstalls the bootloader **and erases the complete
+rest of the flash**. It is meant for devices that are suspected to carry stale or
+corrupt content somewhere in flash (e.g. a `SETTINGS.TXT` that cannot be
+rewritten on any host OS). After it has run, the device is in exactly the state
+of a factory-fresh, SWD-programmed board.
+
+**This is destructive.** Everything above the bootloader is erased to `0xFF`:
+
+* the application (`OTA_SLOT0`)
+* the OTA staging bank (`OTA_SLOT1`)
+* `OTA_SETTINGS` - the device configuration (station name, sensor type, LoRa keys, ...)
+* `OTA_VERSIONS`
+* the OTA A/B flag row
+
+Firmware **and** `settings.txt` have to be written again afterwards. Make sure the
+settings of the device are backed up before running this (copy `SETTINGS.TXT` off
+the drive). The erased flag row is a valid state: the bootloader treats it as
+"slot 0 active, nothing pending", and `VERSIONS.TXT`/`SETTINGS.TXT` fall back to
+their default contents until they are written again.
+
+Because it is destructive, the wiper is **not** built by `make all`:
+
+```
+make BOARD=breezedude wipe        # only the wiper
+make BOARD=breezedude WIPER=1     # everything, including the wiper
+build_bootloader.bat wipe         # Windows: normal build plus the wiper
+```
+
+Usage is the same as a normal bootloader update: drop the `.uf2` onto the
+bootloader drive. The device reinstalls the bootloader, blinks the error LED
+while erasing (a few seconds), and comes back up as an empty bootloader drive.
+
+The wiper also unlocks all 16 NVM regions (`UR` command plus the region lock bits
+in the fuse row) before erasing. A set region lock bit makes the NVM controller
+silently reject every erase/write in that region, which looks exactly like "the
+file cannot be written, on any host OS" - so this is cleared as well. After the
+erase, the whole area is read back: if anything did not erase, the device stays
+in the wiper with a fast blinking error LED instead of reporting success.
+
+Implementation note (`src/selfmain_wipe.c`): the wiper runs from
+`APP_START_ADDRESS`, so it erases itself. The erase loop, the `BOOTPROT` restore
+and the final reset therefore live in a single `.ramfunc` function that is copied
+to RAM at startup and must not call anything located in flash. The bootloader is
+written and verified *before* the erase starts, so a device that loses power
+mid-wipe still comes back with a working bootloader. Like the regular updater,
+the file also contains the legacy bridge at `0x2000`, so it works on devices
+still running the old 8KB bootloader.
+
 ## Fuses
 
 ### SAMD21

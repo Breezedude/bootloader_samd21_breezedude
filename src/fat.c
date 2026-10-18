@@ -431,8 +431,19 @@ void read_block(uint32_t block_no, uint8_t *data) {
 #endif
 }
 
+// After the last UF2 block the host (notably Windows Explorer) still writes the
+// FAT and directory entries of the copied file and waits for them. If the drive
+// vanishes in between, Explorer hangs on the dead volume and crashes after the
+// timeout. So only reset once the host has stopped writing for this long.
+#define APP_RESET_DELAY_MS 1500
+
 void write_block(uint32_t block_no, uint8_t *data, bool quiet, WriteState *state) {
     bool valid_target = false;
+
+    // Any host write (FAT, directory, file data) restarts the countdown.
+    if (!quiet)
+        postponeAppReset(APP_RESET_DELAY_MS);
+
 #if USE_FAT
     if (block_no >= START_CLUSTERS) {
         uint32_t sectionIdx = block_no - START_CLUSTERS;
@@ -490,11 +501,11 @@ void write_block(uint32_t block_no, uint8_t *data, bool quiet, WriteState *state
                     // the staged image back over the freshly written updater/app.
                     ota_force_slot0_active();
                 }
-                // wait a little bit before resetting, to avoid Windows transmit error
+                // Don't reset right away: keep answering MSC requests until the host
+                // has finished its FAT/directory updates (see APP_RESET_DELAY_MS).
                 // https://github.com/Microsoft/uf2-samd21/issues/11
                 if (!quiet)
-                    resetHorizon = timerHigh + 30;
-                // resetIntoApp();
+                    scheduleAppReset(APP_RESET_DELAY_MS);
             }
         }
     } else {
