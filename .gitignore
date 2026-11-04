@@ -10,3 +10,4 @@ scripts/clean-ifaces/*.plist
 TAGS
 dist
 archive/
+burn-last-error.log

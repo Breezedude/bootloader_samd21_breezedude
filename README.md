@@ -212,6 +212,18 @@ Typically, you will do:
 make r
 ```
 
+### Series flashing (Windows)
+
+`burn.bat` flashes one board after the other over SWD with `openocd` and a
+CMSIS-DAP adapter: connect SWD first, then power. It finds the board, erases it,
+writes the newest `build/breezedude/bootloader-breezedude-*.bin`, sets the 16 kB
+bootloader protection and shows OK or FAILED, then waits for the next board.
+Ctrl+C ends it. Another image can be given as the first argument:
+
+```
+burn.bat path\to\bootloader.bin
+```
+
 ### Configuration
 
 There is a number of configuration parameters at the top of `uf2.h` file.
