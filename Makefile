@@ -30,7 +30,7 @@ RAW_GIT_SHA = $(shell git rev-parse --short HEAD 2>nul)
 ifeq ($(strip $(RAW_GIT_SHA)),)
 UF2_VERSION_BASE = v4.0.0
 else
-UF2_VERSION_BASE = v4.2.1-0-g$(RAW_GIT_SHA)
+UF2_VERSION_BASE = v4.2.2-0-g$(RAW_GIT_SHA)
 endif
 
 ifeq ($(CHIP_FAMILY), samd21)
@@ -118,6 +118,7 @@ SOURCES = $(COMMON_SRC) \
 	src/cdc_enumerate.c \
 	src/fat.c \
 	src/main.c \
+	src/ota_swap.c \
 	src/msc.c \
 	src/sam_ba_monitor.c \
 	src/uart_driver.c \

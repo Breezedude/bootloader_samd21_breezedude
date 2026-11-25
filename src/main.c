@@ -79,6 +79,7 @@
  */
 
 #include "uf2.h"
+#include "ota_swap.h"
 
 static void check_start_application(void);
 
@@ -171,7 +172,19 @@ static bool copy_staged_application(uint32_t src_base, uint32_t declared_size) {
     return app_base_valid(OTA_SLOT0_START);
 }
 
+// What src/ota_swap.c needs from the device, see inc/ota_swap.h.
+const uint8_t *ota_swap_read(uint32_t address) { return (const uint8_t *)address; }
+void ota_swap_erase_row(uint32_t address) { flash_erase_row((void *)address); }
+void ota_swap_write_page(uint32_t address, const uint32_t *words) {
+    flash_write_words((void *)address, (uint32_t *)words, OTA_SWAP_PAGE_SIZE / 4u);
+}
+bool ota_swap_image_ok(uint32_t address) { return staged_base_valid(address); }
+
 static void ota_prepare_application(void) {
+    // First of all: a swap that was interrupted has left both slots in
+    // between, and nothing below may judge or copy them before it is finished.
+    ota_swap_boot();
+
     const OTA_AB_Flags *cfg = (const OTA_AB_Flags *)OTA_FLAG_ADDRESS;
     bool slot0_ok = app_base_valid(OTA_SLOT0_START);
     bool slot1_direct_ok = app_base_valid(OTA_SLOT1_START);
@@ -499,6 +512,8 @@ int main(void) {
             process_msc();
         }
 #endif
+
+        usbIdleCheck();
 
         if (!main_b_cdc_enable) {
             // get more predictable timings before the USB is enumerated

@@ -1,5 +1,6 @@
 
 #include "uf2.h"
+#include "ota_swap.h"
 
 #define SERIAL0 (*(uint32_t *)0x0080A00C)
 #define SERIAL1 (*(uint32_t *)0x0080A040)
@@ -475,6 +476,15 @@ void write_block(uint32_t block_no, uint8_t *data, bool quiet, WriteState *state
         // copied from a device; we still want to count these blocks to reset properly
     } else {
         valid_target = true;
+        // A firmware that comes in over USB is not on trial, and the previous
+        // one in slot 1 is not its predecessor: without this the bootloader
+        // would "go back" to it after three starts of a firmware that does
+        // not know it has to confirm itself.
+        static bool swap_forgotten;
+        if (!swap_forgotten && bl->targetAddr < OTA_SLOT1_START) {
+            swap_forgotten = true;
+            ota_swap_forget();
+        }
         // logval("write block at", bl->targetAddr);
         flash_write_row((void *)bl->targetAddr, (void *)bl->data);
     }

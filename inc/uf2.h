@@ -354,6 +354,7 @@ void padded_memcpy(char *dst, const char *src, int len);
 #endif
 
 void resetIntoApp(void);
+void usbIdleCheck(void);
 void resetIntoBootloader(void);
 extern uint32_t current_cpu_frequency_MHz;
 extern volatile bool led_tick_on;

@@ -27,7 +27,7 @@ if "%WIPER%"=="1" set "MAKE_EXTRA=WIPER=1"
 if exist "build" rmdir /s /q "build"
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
-set "UF2BASE=v4.2.1"
+set "UF2BASE=v4.2.2"
 set "UF2VER=%UF2BASE%"
 for /f %%i in ('git rev-parse --short HEAD 2^>nul') do set "GITSHA=%%i"
 if defined GITSHA set "UF2VER=%UF2BASE%-0-g%GITSHA%"

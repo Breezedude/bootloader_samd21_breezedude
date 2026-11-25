@@ -71,6 +71,31 @@ void timerTick(void) {
     }
 }
 
+// Without a USB host the bootloader has nothing to do, and a station that got
+// here by accident - a second reset inside the double-tap window, a brown-out
+// right after an OTA reboot - would sit at 48 MHz until its battery is empty.
+// A host sends a start-of-frame every millisecond, so a frame number that
+// stands still means no host: never connected, cable pulled, or host asleep.
+// After USB_IDLE_TIMEOUT_MS of that the application is started. Called from
+// the main loop, so the reset can never interrupt a flash row write.
+#define USB_IDLE_TIMEOUT_MS 30000
+
+static uint32_t usbIdleFrame;
+static uint32_t usbIdleSince;
+
+void usbIdleCheck(void) {
+    const uint32_t frame = USB->DEVICE.FNUM.reg;
+    const uint32_t t = now;
+    if (frame != usbIdleFrame) {
+        usbIdleFrame = frame;
+        usbIdleSince = t;
+        return;
+    }
+    if ((uint32_t)(t - usbIdleSince) >= (uint32_t)USB_IDLE_TIMEOUT_MS * SYSTICKS_PER_MS) {
+        resetIntoApp();
+    }
+}
+
 void scheduleAppReset(uint32_t ms) {
     appResetAt = now + ms * SYSTICKS_PER_MS;
     appResetPending = true;
